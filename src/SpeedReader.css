@@ -1,0 +1,252 @@
+.speed-reader-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.speed-reader-content {
+  background: white;
+  border-radius: 20px;
+  padding: 40px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  max-width: 900px;
+  width: 100%;
+}
+
+.speed-reader-content h1 {
+  text-align: center;
+  color: #667eea;
+  margin-bottom: 30px;
+  font-size: 2em;
+}
+
+.reader-display {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 60px 40px;
+  margin-bottom: 30px;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  border: 3px solid #e9ecef;
+}
+
+.word-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Courier New', monospace;
+  font-size: 3em;
+  font-weight: bold;
+  color: #2d3748;
+  letter-spacing: 0.05em;
+  position: relative;
+  width: 100%;
+}
+
+.word-before {
+  position: absolute;
+  right: 50%; /* Position to the left of center */
+  margin-right: 0.3em; /* Add spacing from the ORP character */
+  color: #000000;
+  opacity: 0.6;
+}
+
+.word-orp {
+  color: #6a0000;
+  position: relative;
+  /* This is the character that stays centered */
+}
+
+.word-after {
+  position: absolute;
+  left: 50%; /* Position to the right of center */
+  margin-left: 0.3em; /* Add spacing from the ORP character */
+  color: #000000;
+  opacity: 0.6;
+}
+
+.center-line {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(229, 62, 62, 0.2);
+  pointer-events: none;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.control-row {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.speed-control {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.speed-control label {
+  font-weight: 600;
+  color: #4a5568;
+  min-width: 100px;
+}
+
+.speed-control input[type="range"] {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: #e2e8f0;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.speed-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #667eea;
+  cursor: pointer;
+}
+
+.speed-control input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #667eea;
+  cursor: pointer;
+  border: none;
+}
+
+.speed-value {
+  min-width: 80px;
+  text-align: right;
+  font-weight: bold;
+  color: #667eea;
+}
+
+.button-group {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.speed-reader-content button {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.speed-reader-content button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.speed-reader-content button:active {
+  transform: translateY(0);
+}
+
+.btn-primary {
+  background: #667eea;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #5568d3;
+}
+
+.btn-secondary {
+  background: #48bb78;
+  color: white;
+}
+
+.btn-secondary:hover {
+  background: #38a169;
+}
+
+.btn-reset {
+  background: #ed8936;
+  color: white;
+}
+
+.btn-reset:hover {
+  background: #dd6b20;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  transition: width 0.1s linear;
+}
+
+.info-text {
+  text-align: center;
+  color: #718096;
+  margin-top: 20px;
+  font-size: 0.9em;
+}
+
+.keyboard-shortcuts {
+  margin-top: 20px;
+  padding: 15px;
+  background: #f7fafc;
+  border-radius: 8px;
+  font-size: 0.85em;
+  color: #4a5568;
+}
+
+.keyboard-shortcuts h3 {
+  margin-bottom: 10px;
+  color: #2d3748;
+}
+
+.shortcut {
+  display: flex;
+  gap: 10px;
+  margin: 5px 0;
+}
+
+.key {
+  background: #667eea;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-weight: bold;
+  min-width: 60px;
+  text-align: center;  
+}
