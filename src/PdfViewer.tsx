@@ -13,32 +13,23 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 
 interface PdfViewerProps {
   onNavigateToReader: () => void;
+  isSplitView: boolean;
+  onToggleSplitView: () => void;
 }
 
-const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
-    // ── No local pdfData state — use context directly ──────────────────────────
+const THUMBNAIL_SCALE = 0.18;
+
+const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader, isSplitView, onToggleSplitView }) => {
     const [numPages, setNumPages] = useState<number>(0);
     const [scale, setScale] = useState<number>(1.5);
     const [error, setError] = useState<string | null>(null);
     const [isExtracting, setIsExtracting] = useState<boolean>(false);
     const [extractionProgress, setExtractionProgress] = useState<number>(0);
+    const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
 
     const pdfDocumentRef = useRef<any>(null);
     const pdfContainerRef = useRef<HTMLDivElement>(null);
-
-    // Word the user clicked in the PDF text layer — used as speed-read start point.
-    // `occurrence` is the 0-based index of this specific instance on the page
-    // (in PDF content-stream order = DOM order), so we can re-highlight and
-    // jump to the exact occurrence even when the word appears multiple times.
-    const [selectedTargetWord, setSelectedTargetWord] = useState<{
-        word: string;
-        page: number;
-        occurrence: number;
-    } | null>(null);
-
-    // ── CSS Custom Highlight API helpers ──────────────────────────────────────
-    // Supported in Chromium 105+ and Safari 17.2+ (covers Tauri's WKWebView on
-    // macOS 14+). If unavailable the pill still shows the selection; no crash.
+    const activeThumbRef = useRef<HTMLButtonElement | null>(null);
 
     const applyHighlight = useCallback((range: Range) => {
         if (typeof CSS !== 'undefined' && 'highlights' in CSS) {
@@ -61,29 +52,31 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
         pdfPath,
         setPdfPath,
         pageTexts,
-        // currentViewPage is the source of truth for which page we're on.
-        // We initialize currentPage from it so returning from SpeedReader
-        // lands on the correct page rather than always jumping back to 1.
         currentViewPage,
         setCurrentViewPage,
         pdfData: contextPdfData,
         setPdfData: setContextPdfData,
         setTargetWord,
+        pdfSelectedTarget: selectedTargetWord,
+        setPdfSelectedTarget: setSelectedTargetWord,
+        targetWord,
     } = useReading();
 
-    // currentPage drives the <Page> component. Initialise from context so
-    // switching back from SpeedReader restores the last-viewed page.
     const [currentPage, setCurrentPage] = useState<number>(currentViewPage || 1);
 
-    // Keep local currentPage in sync if context changes externally
-    // (e.g. SpeedReader updated currentViewPage while this component was hidden).
     useEffect(() => {
         if (currentViewPage && currentViewPage !== currentPage) {
             setCurrentPage(currentViewPage);
         }
-        // Only re-sync when the component first becomes visible / mounts.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);  // intentionally empty — only run on mount
+    }, []);
+
+    useEffect(() => {
+        activeThumbRef.current?.scrollIntoView({
+            block: 'nearest',
+            behavior: 'smooth',
+        });
+    }, [currentPage]);
 
     const fileData = useMemo(() => {
         if (!contextPdfData) return null;
@@ -104,7 +97,7 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
                 setCurrentPage(1);
                 setCurrentViewPage(1);
                 setError(null);
-                clearPageTexts(); // clears word index and reading page too (see context)
+                clearPageTexts();
                 setSelectedTargetWord(null);
                 clearHighlight();
             } catch (err) {
@@ -114,9 +107,6 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
         }
     };
 
-    // Walk the text layer and highlight the n-th occurrence (selectedTargetWord.occurrence)
-    // of the target word. This is extracted as a stable callback so the MutationObserver
-    // effect below can call it without capturing a stale closure.
     const reapplyHighlight = useCallback(() => {
         if (!selectedTargetWord || selectedTargetWord.page !== currentPage) {
             clearHighlight();
@@ -128,14 +118,11 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
         if (!textLayer) return;
 
         const needle = selectedTargetWord.word.toLowerCase();
-        // 'g' flag required for exec-loop; reset lastIndex per span below.
         const wordRe = new RegExp(
             `(?<![a-zA-Z0-9])${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-zA-Z0-9])`,
             'ig'
         );
 
-        // Count every individual word match across span texts (character-level),
-        // not one count per span — a span can contain the word multiple times.
         let found = 0;
         for (const span of Array.from(textLayer.querySelectorAll('span'))) {
             const textNode = span.firstChild;
@@ -150,7 +137,7 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
                         range.setStart(textNode, m.index);
                         range.setEnd(textNode, m.index + m[0].length);
                         applyHighlight(range);
-                    } catch (_) { /* DOM changed between schedule and execution */ }
+                    } catch (_) {}
                     return;
                 }
                 found++;
@@ -158,12 +145,11 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
         }
     }, [selectedTargetWord, currentPage, applyHighlight, clearHighlight]);
 
-    // MutationObserver keeps the highlight alive at all times.
-    // Any time react-pdf rebuilds the text layer (page change, zoom, font load,
-    // or any internal re-render) the observer fires and re-applies.
-    // A debounce of 80 ms lets the entire text layer finish painting before
-    // we query it — without leaving a visible gap.
+    // Manual-selection highlight: MutationObserver with 80ms debounce so the
+    // highlight persists after react-pdf re-renders the text layer.
+    // Disabled in split view — the live highlight below takes over there.
     useEffect(() => {
+        if (isSplitView) return;
         if (!selectedTargetWord || !pdfContainerRef.current) {
             if (!selectedTargetWord) clearHighlight();
             return;
@@ -178,22 +164,122 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
         const observer = new MutationObserver(schedule);
         observer.observe(pdfContainerRef.current, { childList: true, subtree: true });
 
-        // Run immediately in case the text layer is already painted and no
-        // mutations are pending (e.g. user just toggled an unrelated state).
         schedule();
 
         return () => {
             observer.disconnect();
             clearTimeout(debounce);
         };
-    }, [selectedTargetWord, currentPage, reapplyHighlight, clearHighlight]);
+    }, [isSplitView, selectedTargetWord, currentPage, reapplyHighlight, clearHighlight]);
 
-    // ── Word selection from PDF text layer ────────────────────────────────────
+    const goToPage = useCallback((pageNum: number) => {
+        setCurrentPage(pageNum);
+        setCurrentViewPage(pageNum);
+    }, [setCurrentViewPage]);
 
-    // Fires on mouseup inside the PDF container. Captures the selected word
-    // (double-click selects a word; click-drag selects a phrase and we take
-    // the first word). Clears the browser selection afterward so it doesn't
-    // interfere with the next interaction.
+    // ─── Split-view live highlight ────────────────────────────────────────────────
+    // We deliberately avoid React state for each word update — every word change
+    // would cause a re-render chain and the 80ms debounce makes the highlight
+    // visibly lag. Instead: store the pre-computed target in a ref, call the DOM
+    // function directly (no debounce), and let a short-debounced MutationObserver
+    // handle the only case that needs a retry: a page transition where the text
+    // layer hasn't painted yet.
+
+    const liveHighlightRef = useRef<{ word: string; page: number; occurrence: number } | null>(null);
+
+    // Same DOM walk as reapplyHighlight but reads from liveHighlightRef (a ref,
+    // not state) so it can be called without triggering renders.
+    const doLiveHighlight = useCallback(() => {
+        const target = liveHighlightRef.current;
+        if (!target || target.page !== currentPage) { clearHighlight(); return; }
+        const container = pdfContainerRef.current;
+        if (!container) return;
+        const textLayer = container.querySelector('.react-pdf__Page__textContent');
+        if (!textLayer) return;
+
+        const needle = target.word.toLowerCase();
+        const wordRe = new RegExp(
+            `(?<![a-zA-Z0-9])${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-zA-Z0-9])`,
+            'ig'
+        );
+        let found = 0;
+        for (const span of Array.from(textLayer.querySelectorAll('span'))) {
+            const textNode = span.firstChild;
+            if (!textNode || textNode.nodeType !== Node.TEXT_NODE) continue;
+            const text = textNode.textContent ?? '';
+            wordRe.lastIndex = 0;
+            let m;
+            while ((m = wordRe.exec(text)) !== null) {
+                if (found === target.occurrence) {
+                    try {
+                        const range = document.createRange();
+                        range.setStart(textNode, m.index);
+                        range.setEnd(textNode, m.index + m[0].length);
+                        applyHighlight(range);
+                    } catch (_) {}
+                    return;
+                }
+                found++;
+            }
+        }
+        clearHighlight();
+    }, [currentPage, applyHighlight, clearHighlight]);
+
+    // Fires on every word change when in split view.
+    useEffect(() => {
+        if (!isSplitView || !targetWord) {
+            liveHighlightRef.current = null;
+            if (!isSplitView) clearHighlight();
+            return;
+        }
+
+        // Navigate to the reading page when it changes.
+        if (targetWord.pageNumber !== currentPage) {
+            goToPage(targetWord.pageNumber);
+            // Text layer isn't ready yet — the MutationObserver below retries
+            // once the new page paints.
+        }
+
+        // Pre-compute occurrence from wordIndexOnPage using the extracted text,
+        // then store in ref so doLiveHighlight can be called without state.
+        const pageTextData = pageTexts.get(targetWord.pageNumber);
+        if (pageTextData) {
+            const { text } = pageTextData;
+            const needle = targetWord.word;
+            const escapedNeedle = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            const tokenRe = /\S+/g;
+            let tokenMatch;
+            let tokenIdx = 0;
+            let charPos = text.length;
+            while ((tokenMatch = tokenRe.exec(text)) !== null) {
+                if (tokenIdx === targetWord.wordIndexOnPage) { charPos = tokenMatch.index; break; }
+                tokenIdx++;
+            }
+            const wordRe = new RegExp(`(?<![a-zA-Z0-9])${escapedNeedle}(?![a-zA-Z0-9])`, 'ig');
+            let occurrence = 0;
+            let m;
+            while ((m = wordRe.exec(text)) !== null && m.index < charPos) occurrence++;
+
+            liveHighlightRef.current = { word: needle, page: targetWord.pageNumber, occurrence };
+        }
+
+        // Apply immediately — only the page-transition path needs the retry below.
+        if (targetWord.pageNumber === currentPage) doLiveHighlight();
+
+    }, [isSplitView, targetWord, currentPage, pageTexts, goToPage, doLiveHighlight, clearHighlight]);
+
+    // Short-debounced MutationObserver for the page-transition case: the reading
+    // page just changed, the new text layer is loading — retry until it's ready.
+    useEffect(() => {
+        if (!isSplitView || !pdfContainerRef.current) return;
+        let debounce: ReturnType<typeof setTimeout>;
+        const schedule = () => { clearTimeout(debounce); debounce = setTimeout(doLiveHighlight, 16); };
+        const observer = new MutationObserver(schedule);
+        observer.observe(pdfContainerRef.current, { childList: true, subtree: true });
+        return () => { observer.disconnect(); clearTimeout(debounce); };
+    }, [isSplitView, doLiveHighlight]);
+
     const handleWordSelection = useCallback(() => {
         const selection = window.getSelection();
         if (!selection || selection.isCollapsed) return;
@@ -206,47 +292,44 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
 
         const selRange = selection.getRangeAt(0);
 
-        // ── Determine which occurrence the user clicked ─────────────────────────
-        // Walk spans in DOM order (= PDF content-stream order), count how many
-        // matching spans appear before the clicked one. That count becomes the
-        // `occurrence` index used by reapplyHighlight and extractInitialPages.
         let occurrence = 0;
         let foundOccurrence = false;
         const container = pdfContainerRef.current;
         if (container) {
             const textLayer = container.querySelector('.react-pdf__Page__textContent');
             if (textLayer) {
+                // 'ig' flag + exec loop so we count every match, not just per-span.
                 const wordRe = new RegExp(
                     `(?<![a-zA-Z0-9])${clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-zA-Z0-9])`,
-                    'i'
+                    'ig'
                 );
-                let count = 0;
                 for (const span of Array.from(textLayer.querySelectorAll('span'))) {
                     const textNode = span.firstChild;
                     if (!textNode || textNode.nodeType !== Node.TEXT_NODE) continue;
-                    if (!wordRe.test(textNode.textContent ?? '')) continue;
-                    // The selection's startContainer is the text node of the clicked span.
-                    if (textNode === selRange.startContainer || span === selRange.startContainer) {
-                        occurrence = count;
+                    const text = textNode.textContent ?? '';
+                    const isClicked = textNode === selRange.startContainer || span === selRange.startContainer;
+                    // For the clicked span, only count matches that START before the cursor.
+                    // For earlier spans, count all matches.
+                    const limit = isClicked ? selRange.startOffset : text.length;
+                    wordRe.lastIndex = 0;
+                    let m;
+                    while ((m = wordRe.exec(text)) !== null && m.index < limit) {
+                        occurrence++;
+                    }
+                    if (isClicked) {
                         foundOccurrence = true;
                         break;
                     }
-                    count++;
                 }
             }
         }
-        // If we couldn't resolve the occurrence (e.g. selection crossed span boundaries),
-        // default to 0 — still a valid and useful start position.
         if (!foundOccurrence) occurrence = 0;
 
-        // Apply the highlight immediately using the live Range (before clearing selection).
         applyHighlight(selRange.cloneRange());
 
         setSelectedTargetWord({ word: clean, page: currentPage, occurrence });
         selection.removeAllRanges();
     }, [currentPage, applyHighlight]);
-
-    // ── Text extraction ────────────────────────────────────────────────────────
 
     const extractPageText = useCallback(async (pageNumber: number): Promise<string> => {
         if (!pdfDocumentRef.current) throw new Error('PDF document not loaded');
@@ -262,17 +345,10 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
     const extractInitialPages = useCallback(async (startPage: number = 1) => {
         if (!pdfDocumentRef.current) return;
 
-        // When a target word is set, always start extraction from that word's page.
         const effectiveStart = selectedTargetWord ? selectedTargetWord.page : startPage;
 
-        // ── Critical: clear stale pages before a target-word jump ──────────────
-        // getAllWords() in SpeedReader concatenates every page in pageTexts in
-        // sorted order.  If old pages from a previous reading session are still in
-        // the map, globalIdx = idxOnPage would point to the wrong word.
-        // Clearing first ensures the map only ever holds the pages we extract now,
-        // so words[idxOnPage] === targetWord is guaranteed.
         if (selectedTargetWord) {
-            clearPageTexts(); // also resets currentWordIndex → 0
+            clearPageTexts();
         }
 
         setIsExtracting(true);
@@ -281,8 +357,6 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
 
         try {
             const totalPagesToExtract = Math.min(2, numPages - effectiveStart + 1);
-            // Local copy so we can read text synchronously — React state won't
-            // flush until after this async function returns.
             const extractedTexts = new Map<number, string>();
 
             for (let i = 0; i < totalPagesToExtract; i++) {
@@ -296,28 +370,27 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
             setCurrentReadingPage(effectiveStart);
 
             if (selectedTargetWord) {
-                // After clearPageTexts() above, extractedTexts is the entire new map.
-                // effectiveStart === selectedTargetWord.page, so globalIdx === idxOnPage.
                 const targetPageText = extractedTexts.get(selectedTargetWord.page);
                 if (targetPageText) {
-                    const pageWords = targetPageText.split(/\s+/).filter(w => w.length > 0);
-                    const needle = selectedTargetWord.word.toLowerCase();
+                    // Use the same character-level regex that handleWordSelection used
+                    // so occurrence indices are consistent between the two.
+                    const needle = selectedTargetWord.word;
+                    const wordRe = new RegExp(
+                        `(?<![a-zA-Z0-9])${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-zA-Z0-9])`,
+                        'ig'
+                    );
 
-                    // Find the n-th occurrence in extracted text order, matching the
-                    // DOM occurrence the user actually clicked (same content-stream order).
                     let matchCount = 0;
-                    let idxOnPage = 0; // fallback: start of page
-                    for (let i = 0; i < pageWords.length; i++) {
-                        const w = pageWords[i]
-                            .replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '')
-                            .toLowerCase();
-                        if (w === needle) {
-                            if (matchCount === selectedTargetWord.occurrence) {
-                                idxOnPage = i;
-                                break;
-                            }
-                            matchCount++;
+                    let idxOnPage = 0;
+                    let m;
+                    while ((m = wordRe.exec(targetPageText)) !== null) {
+                        if (matchCount === selectedTargetWord.occurrence) {
+                            // Convert char position to word index within this page.
+                            const textBefore = targetPageText.substring(0, m.index);
+                            idxOnPage = textBefore.split(/\s+/).filter(w => w.length > 0).length;
+                            break;
                         }
+                        matchCount++;
                     }
 
                     setCurrentWordIndex(idxOnPage);
@@ -328,8 +401,6 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
                     });
                 }
             }
-            // No target: preserve currentWordIndex (resume position).
-            // clearPageTexts() on new PDF load already resets it to 0.
 
             onNavigateToReader();
         } catch (err) {
@@ -339,8 +410,7 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
             setIsExtracting(false);
             setExtractionProgress(0);
         }
-    }, [extractPageText, numPages, setPageText, setCurrentReadingPage, onNavigateToReader,
-        selectedTargetWord, setCurrentWordIndex, setTargetWord, clearPageTexts]);
+    }, [extractPageText, numPages, setPageText, setCurrentReadingPage, onNavigateToReader, selectedTargetWord, setCurrentWordIndex, setTargetWord, clearPageTexts]);
 
     const preloadNextPage = useCallback(async (pageNumber: number) => {
         if (!pdfDocumentRef.current) return;
@@ -359,8 +429,6 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
         return () => { delete (window as any).preloadNextPage; };
     }, [preloadNextPage]);
 
-    // ── Document events ────────────────────────────────────────────────────────
-
     const handleDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
         setNumPages(numPages);
         setTotalPages(numPages);
@@ -371,97 +439,474 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
         setError(`Failed to load PDF: ${err.message || 'Unknown error'}`);
     };
 
-    // ── Navigation ─────────────────────────────────────────────────────────────
-
     const goToNextPage = () => {
         if (currentPage < numPages) {
-            const next = currentPage + 1;
-            setCurrentPage(next);
-            setCurrentViewPage(next);
+            goToPage(currentPage + 1);
         }
     };
 
     const goToPreviousPage = () => {
         if (currentPage > 1) {
-            const prev = currentPage - 1;
-            setCurrentPage(prev);
-            setCurrentViewPage(prev);
+            goToPage(currentPage - 1);
         }
     };
 
-    const handleZoomIn  = () => setScale(prev => Math.min(3, prev + 0.25));
+    const handleZoomIn = () => setScale(prev => Math.min(3, prev + 0.25));
     const handleZoomOut = () => setScale(prev => Math.max(0.5, prev - 0.25));
 
-    const startReadingFromCurrentPage = () => extractInitialPages(currentPage);
+    const startReadingFromCurrentPage = () => {
+        // If pages are already loaded and no new target word was picked, resume
+        // in place — skip extraction so currentWordIndex isn't touched.
+        if (pageTexts.size > 0 && !selectedTargetWord) {
+            onNavigateToReader();
+            return;
+        }
+        extractInitialPages(currentPage);
+    };
 
     return (
         <div className="pdf-viewer">
             <style>{`
                 * { margin: 0; padding: 0; box-sizing: border-box; }
                 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-                .pdf-viewer { width: 100%; height: 100vh; background: #111; display: flex; flex-direction: column; font-family: inherit; color: #c8c8c8; -webkit-font-smoothing: antialiased; }
 
-                /* Header */
-                .header { padding: 0 18px; height: 44px; background: #181818; border-bottom: 1px solid #252525; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-shrink: 0; }
-                .title { font-size: 13px; font-weight: 500; color: #888; letter-spacing: 0.01em; }
-                .header-actions { display: flex; gap: 8px; align-items: center; }
+                .pdf-viewer {
+                    width: 100%;
+                    height: 100vh;
+                    background: #111;
+                    display: flex;
+                    flex-direction: column;
+                    font-family: inherit;
+                    color: #c8c8c8;
+                    -webkit-font-smoothing: antialiased;
+                }
 
-                /* Buttons */
-                .btn { padding: 5px 12px; background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 4px; color: #c8c8c8; font-size: 12px; font-family: inherit; cursor: pointer; transition: background 0.12s, border-color 0.12s; white-space: nowrap; }
-                .btn:hover { background: #262626; border-color: #3a3a3a; }
-                .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-                /* "Open PDF" — ghost */
-                .btn.primary { background: #1e1e1e; border-color: #363636; color: #aaa; }
-                .btn.primary:hover:not(:disabled) { background: #262626; border-color: #484848; color: #c8c8c8; }
-                /* "Speed Read" — high-contrast fill, the one key action */
-                .btn.success { background: #c8c8c8; border-color: #c8c8c8; color: #111; font-weight: 600; }
-                .btn.success:hover:not(:disabled) { background: #b8b8b8; border-color: #b8b8b8; }
+                .header {
+                    padding: 0 18px;
+                    height: 44px;
+                    background: #181818;
+                    border-bottom: 1px solid #252525;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    gap: 12px;
+                    flex-shrink: 0;
+                }
 
-                /* Content area */
-                .content { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 2rem; overflow-y: auto; }
-                .pdf-container { box-shadow: 0 2px 12px rgba(0,0,0,0.6); overflow: hidden; background: #fff; }
+                .title {
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: #888;
+                    letter-spacing: 0.01em;
+                }
 
-                /* Bottom controls */
-                .controls { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: #181818; border: 1px solid #252525; border-radius: 6px; padding: 8px 16px; display: flex; align-items: center; gap: 1.25rem; box-shadow: 0 4px 16px rgba(0,0,0,0.5); z-index: 1000; }
-                .nav-controls { display: flex; align-items: center; gap: 10px; }
-                .nav-btn { width: 32px; height: 32px; background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 4px; color: #c8c8c8; font-size: 1.1rem; cursor: pointer; transition: background 0.12s; display: flex; align-items: center; justify-content: center; }
-                .nav-btn:hover:not(:disabled) { background: #262626; }
-                .nav-btn:disabled { opacity: 0.25; cursor: not-allowed; }
-                .page-info { font-size: 12px; color: #555; min-width: 72px; text-align: center; font-variant-numeric: tabular-nums; }
-                .zoom-controls { display: flex; align-items: center; gap: 8px; padding-left: 1.25rem; border-left: 1px solid #252525; }
-                .zoom-btn { width: 28px; height: 28px; background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 4px; color: #c8c8c8; font-size: 0.9rem; cursor: pointer; transition: background 0.12s; display: flex; align-items: center; justify-content: center; }
-                .zoom-btn:hover { background: #262626; }
-                .zoom-level { font-size: 11px; color: #555; min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
+                .header-actions {
+                    display: flex;
+                    gap: 8px;
+                    align-items: center;
+                }
 
-                /* Empty state */
-                .empty-state { text-align: center; padding: 4rem 2rem; }
-                .empty-icon { font-size: 3rem; margin-bottom: 1.5rem; opacity: 0.15; }
-                .empty-title { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; color: #c8c8c8; }
-                .empty-description { font-size: 0.875rem; color: #555; margin-bottom: 2rem; line-height: 1.6; }
+                .btn {
+                    padding: 5px 12px;
+                    background: #1e1e1e;
+                    border: 1px solid #2e2e2e;
+                    border-radius: 4px;
+                    color: #c8c8c8;
+                    font-size: 12px;
+                    font-family: inherit;
+                    cursor: pointer;
+                    transition: background 0.12s, border-color 0.12s;
+                    white-space: nowrap;
+                }
 
-                /* Error / loading */
-                .error-message { background: #1e1212; border: 1px solid #3a2020; color: #cc8888; padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1.5rem; font-size: 13px; }
-                .loading-message { background: #181818; border: 1px solid #2a2a2a; color: #888; padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.75rem; font-size: 13px; }
-                .spinner { width: 16px; height: 16px; border: 2px solid #333; border-top-color: #888; border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
-                @keyframes spin { to { transform: rotate(360deg); } }
-                .progress-bar-container { width: 100%; max-width: 200px; height: 3px; background: #2a2a2a; border-radius: 2px; overflow: hidden; }
-                .progress-bar-fill { height: 100%; background: #555; transition: width 0.3s; }
+                .btn:hover {
+                    background: #262626;
+                    border-color: #3a3a3a;
+                }
 
-                /* Target word pill — monochrome */
-                .target-pill { display: flex; align-items: center; gap: 6px; background: #1e1e1e; border: 1px solid #363636; border-radius: 4px; padding: 4px 10px; font-size: 11px; color: #888; max-width: 220px; min-width: 0; }
-                .target-pill-word { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #c8c8c8; }
-                .target-pill-page { flex-shrink: 0; background: #2a2a2a; border-radius: 3px; padding: 1px 5px; font-size: 10px; color: #666; }
-                .target-clear-btn { flex-shrink: 0; background: none; border: none; color: #555; cursor: pointer; font-size: 0.85rem; padding: 0 2px; line-height: 1; transition: color 0.12s; font-family: inherit; }
-                .target-clear-btn:hover { color: #c8c8c8; }
-                .selection-hint { font-size: 11px; color: #333; text-align: center; padding: 6px 0 0; pointer-events: none; user-select: none; }
-                /* CSS Custom Highlight API — marks the target word in the PDF text layer */
-                ::highlight(sr-target) { background-color: rgba(180, 180, 180, 0.45); color: inherit; }
+                .btn:disabled {
+                    opacity: 0.4;
+                    cursor: not-allowed;
+                }
+
+                .btn.primary {
+                    background: #1e1e1e;
+                    border-color: #363636;
+                    color: #aaa;
+                }
+
+                .btn.primary:hover:not(:disabled) {
+                    background: #262626;
+                    border-color: #484848;
+                    color: #c8c8c8;
+                }
+
+                .btn.success {
+                    background: #c8c8c8;
+                    border-color: #c8c8c8;
+                    color: #111;
+                    font-weight: 600;
+                }
+
+                .btn.success:hover:not(:disabled) {
+                    background: #b8b8b8;
+                    border-color: #b8b8b8;
+                }
+
+                .sidebar-toggle {
+                    width: 30px;
+                    height: 30px;
+                    background: #1e1e1e;
+                    border: 1px solid #2e2e2e;
+                    border-radius: 4px;
+                    color: #c8c8c8;
+                    font-size: 14px;
+                    cursor: pointer;
+                    transition: background 0.12s, border-color 0.12s;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                }
+
+                .sidebar-toggle:hover {
+                    background: #262626;
+                    border-color: #3a3a3a;
+                }
+
+                .content {
+                    flex: 1;
+                    display: flex;
+                    min-height: 0;
+                    overflow: hidden;
+                }
+
+                .sidebar {
+                    width: 220px;
+                    background: #151515;
+                    border-right: 1px solid #252525;
+                    overflow-y: auto;
+                    flex-shrink: 0;
+                    padding: 12px 10px;
+                    transition: width 0.18s ease, padding 0.18s ease, border-color 0.18s ease;
+                }
+
+                .sidebar.closed {
+                    width: 0;
+                    padding: 0;
+                    border-right-color: transparent;
+                    overflow: hidden;
+                }
+
+                .sidebar-header {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 10px;
+                    padding: 0 2px;
+                }
+
+                .sidebar-title {
+                    font-size: 11px;
+                    color: #777;
+                    text-transform: uppercase;
+                    letter-spacing: 0.08em;
+                }
+
+                .thumbnail-list {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+
+                .thumbnail-btn {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 6px;
+                    width: 100%;
+                    padding: 8px;
+                    background: #1b1b1b;
+                    border: 1px solid #2a2a2a;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    transition: background 0.12s, border-color 0.12s;
+                }
+
+                .thumbnail-btn:hover {
+                    background: #222;
+                    border-color: #3a3a3a;
+                }
+
+                .thumbnail-btn.active {
+                    border-color: #8a8a8a;
+                    background: #242424;
+                }
+
+                .thumbnail-btn :global(canvas),
+                .thumbnail-btn canvas {
+                    max-width: 100%;
+                    height: auto !important;
+                    display: block;
+                }
+
+                .thumbnail-page-label {
+                    font-size: 11px;
+                    color: #777;
+                    font-variant-numeric: tabular-nums;
+                }
+
+                .main-pane {
+                    flex: 1;
+                    min-width: 0;
+                    min-height: 0;
+                    overflow-y: auto;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    padding: 2rem;
+                }
+
+                .pdf-container {
+                    box-shadow: 0 2px 12px rgba(0,0,0,0.6);
+                    overflow: hidden;
+                    background: #fff;
+                    max-width: 100%;
+                }
+
+                .controls {
+                    position: fixed;
+                    bottom: 1.5rem;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: #181818;
+                    border: 1px solid #252525;
+                    border-radius: 6px;
+                    padding: 8px 16px;
+                    display: flex;
+                    align-items: center;
+                    gap: 1.25rem;
+                    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+                    z-index: 1000;
+                }
+
+                .nav-controls {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                }
+
+                .nav-btn {
+                    width: 32px;
+                    height: 32px;
+                    background: #1e1e1e;
+                    border: 1px solid #2e2e2e;
+                    border-radius: 4px;
+                    color: #c8c8c8;
+                    font-size: 1.1rem;
+                    cursor: pointer;
+                    transition: background 0.12s;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+
+                .nav-btn:hover:not(:disabled) {
+                    background: #262626;
+                }
+
+                .nav-btn:disabled {
+                    opacity: 0.25;
+                    cursor: not-allowed;
+                }
+
+                .page-info {
+                    font-size: 12px;
+                    color: #555;
+                    min-width: 72px;
+                    text-align: center;
+                    font-variant-numeric: tabular-nums;
+                }
+
+                .zoom-controls {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding-left: 1.25rem;
+                    border-left: 1px solid #252525;
+                }
+
+                .zoom-btn {
+                    width: 28px;
+                    height: 28px;
+                    background: #1e1e1e;
+                    border: 1px solid #2e2e2e;
+                    border-radius: 4px;
+                    color: #c8c8c8;
+                    font-size: 0.9rem;
+                    cursor: pointer;
+                    transition: background 0.12s;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+
+                .zoom-btn:hover {
+                    background: #262626;
+                }
+
+                .zoom-level {
+                    font-size: 11px;
+                    color: #555;
+                    min-width: 44px;
+                    text-align: center;
+                    font-variant-numeric: tabular-nums;
+                }
+
+                .empty-state {
+                    text-align: center;
+                    padding: 4rem 2rem;
+                    width: 100%;
+                }
+
+                .empty-icon {
+                    font-size: 3rem;
+                    margin-bottom: 1.5rem;
+                    opacity: 0.15;
+                }
+
+                .empty-title {
+                    font-size: 1.25rem;
+                    font-weight: 600;
+                    margin-bottom: 0.5rem;
+                    color: #c8c8c8;
+                }
+
+                .empty-description {
+                    font-size: 0.875rem;
+                    color: #555;
+                    margin-bottom: 2rem;
+                    line-height: 1.6;
+                }
+
+                .error-message {
+                    background: #1e1212;
+                    border: 1px solid #3a2020;
+                    color: #cc8888;
+                    padding: 0.75rem 1rem;
+                    border-radius: 4px;
+                    margin-bottom: 1.5rem;
+                    font-size: 13px;
+                }
+
+                .loading-message {
+                    background: #181818;
+                    border: 1px solid #2a2a2a;
+                    color: #888;
+                    padding: 0.75rem 1rem;
+                    border-radius: 4px;
+                    margin-bottom: 1.5rem;
+                    display: flex;
+                    align-items: center;
+                    gap: 0.75rem;
+                    font-size: 13px;
+                }
+
+                .spinner {
+                    width: 16px;
+                    height: 16px;
+                    border: 2px solid #333;
+                    border-top-color: #888;
+                    border-radius: 50%;
+                    animation: spin 0.8s linear infinite;
+                    flex-shrink: 0;
+                }
+
+                @keyframes spin {
+                    to { transform: rotate(360deg); }
+                }
+
+                .progress-bar-container {
+                    width: 100%;
+                    max-width: 200px;
+                    height: 3px;
+                    background: #2a2a2a;
+                    border-radius: 2px;
+                    overflow: hidden;
+                }
+
+                .progress-bar-fill {
+                    height: 100%;
+                    background: #555;
+                    transition: width 0.3s;
+                }
+
+                .target-pill {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    background: #1e1e1e;
+                    border: 1px solid #363636;
+                    border-radius: 4px;
+                    padding: 4px 10px;
+                    font-size: 11px;
+                    color: #888;
+                    max-width: 220px;
+                    min-width: 0;
+                }
+
+                .target-pill-word {
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    font-weight: 600;
+                    color: #c8c8c8;
+                }
+
+                .target-pill-page {
+                    flex-shrink: 0;
+                    background: #2a2a2a;
+                    border-radius: 3px;
+                    padding: 1px 5px;
+                    font-size: 10px;
+                    color: #666;
+                }
+
+                .target-clear-btn {
+                    flex-shrink: 0;
+                    background: none;
+                    border: none;
+                    color: #555;
+                    cursor: pointer;
+                    font-size: 0.85rem;
+                    padding: 0 2px;
+                    line-height: 1;
+                    transition: color 0.12s;
+                    font-family: inherit;
+                }
+
+                .target-clear-btn:hover {
+                    color: #c8c8c8;
+                }
+
+                .selection-hint {
+                    font-size: 11px;
+                    color: #333;
+                    text-align: center;
+                    padding: 6px 0 0;
+                    pointer-events: none;
+                    user-select: none;
+                }
+
+                ::highlight(sr-target) {
+                    background-color: rgba(180, 180, 180, 0.45);
+                    color: inherit;
+                }
             `}</style>
 
             <div className="header">
                 <div className="title">PDF Viewer</div>
                 <div className="header-actions">
-                    {/* Target word pill — shown when user has selected a start word */}
                     {selectedTargetWord && (
                         <div className="target-pill" title={`Start speed reading from "${selectedTargetWord.word}"`}>
                             <span className="target-pill-word">Start: "{selectedTargetWord.word}"</span>
@@ -477,9 +922,25 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
                         </div>
                     )}
 
+                    {fileData && (
+                        <button
+                            className="sidebar-toggle"
+                            onClick={() => setIsSidebarOpen(prev => !prev)}
+                            title={isSidebarOpen ? 'Hide page sidebar' : 'Show page sidebar'}
+                            type="button"
+                        >
+                            ☰
+                        </button>
+                    )}
+
                     <button className="btn primary" onClick={handleFileSelect}>
                         {pdfPath ? 'Change PDF' : 'Open PDF'}
                     </button>
+
+                    <button className="btn" onClick={onToggleSplitView} type="button">
+                        {isSplitView ? 'Exit Split' : 'Split View'}
+                    </button>
+
                     {fileData && (
                         <button
                             className="btn success"
@@ -490,61 +951,103 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader }) => {
                                 ? 'Loading...'
                                 : selectedTargetWord
                                     ? `Speed Read from "${selectedTargetWord.word}"`
-                                    : `Speed Read — p.${currentPage}`}
+                                    : pageTexts.size > 0
+                                        ? 'Resume Reading'
+                                        : `Speed Read — p.${currentPage}`}
                         </button>
                     )}
                 </div>
             </div>
 
             <div className="content">
-                {error && <div className="error-message">{error}</div>}
-                {isExtracting && (
-                    <div className="loading-message">
-                        <div className="spinner" />
-                        <div>
-                            <div>Extracting text from pages...</div>
-                            <div className="progress-bar-container" style={{ marginTop: '8px' }}>
-                                <div className="progress-bar-fill" style={{ width: `${extractionProgress}%` }} />
+                {fileData && (
+                    <aside className={`sidebar ${isSidebarOpen ? '' : 'closed'}`}>
+                        <div className="sidebar-header">
+                            <div className="sidebar-title">Pages</div>
+                        </div>
+
+                        <div className="thumbnail-list">
+                            {Array.from({ length: numPages }, (_, i) => {
+                                const pageNum = i + 1;
+                                const isActive = pageNum === currentPage;
+
+                                return (
+                                    <button
+                                        key={pageNum}
+                                        ref={isActive ? activeThumbRef : null}
+                                        className={`thumbnail-btn ${isActive ? 'active' : ''}`}
+                                        onClick={() => goToPage(pageNum)}
+                                        type="button"
+                                    >
+                                        <Document file={fileData}>
+                                            <Page
+                                                pageNumber={pageNum}
+                                                scale={THUMBNAIL_SCALE}
+                                                renderTextLayer={false}
+                                                renderAnnotationLayer={false}
+                                            />
+                                        </Document>
+                                        <div className="thumbnail-page-label">Page {pageNum}</div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </aside>
+                )}
+
+                <div className="main-pane">
+                    {error && <div className="error-message">{error}</div>}
+
+                    {isExtracting && (
+                        <div className="loading-message">
+                            <div className="spinner" />
+                            <div>
+                                <div>Extracting text from pages...</div>
+                                <div className="progress-bar-container" style={{ marginTop: '8px' }}>
+                                    <div className="progress-bar-fill" style={{ width: `${extractionProgress}%` }} />
+                                </div>
                             </div>
                         </div>
-                    </div>
-                )}
-                {!fileData ? (
-                    <div className="empty-state">
-                        <div className="empty-icon">—</div>
-                        <h2 className="empty-title">No document open</h2>
-                        <p className="empty-description">
-                            Open a PDF, then double-click any word to set your start point
-                        </p>
-                    </div>
-                ) : (
-                    <div
-                        className="pdf-container"
-                        ref={pdfContainerRef}
-                        onMouseUp={handleWordSelection}
-                    >
-                        <Document
-                            file={fileData}
-                            onLoadSuccess={(pdf) => {
-                                handleDocumentLoadSuccess({ numPages: pdf.numPages });
-                                pdfDocumentRef.current = pdf;
-                            }}
-                            onLoadError={handleDocumentError}
-                        >
-                            <Page
-                                pageNumber={currentPage}
-                                scale={scale}
-                                renderTextLayer={true}
-                                renderAnnotationLayer={false}
-                            />
-                        </Document>
-                    </div>
-                )}
-                {fileData && (
-                    <p className="selection-hint">
-                        Double-click any word to set it as the speed-reading start point
-                    </p>
-                )}
+                    )}
+
+                    {!fileData ? (
+                        <div className="empty-state">
+                            <div className="empty-icon">—</div>
+                            <h2 className="empty-title">No document open</h2>
+                            <p className="empty-description">
+                                Open a PDF, then double-click any word to set your start point
+                            </p>
+                        </div>
+                    ) : (
+                        <>
+                            <div
+                                className="pdf-container"
+                                ref={pdfContainerRef}
+                                onMouseUp={handleWordSelection}
+                            >
+                                <Document
+                                    file={fileData}
+                                    onLoadSuccess={(pdf) => {
+                                        handleDocumentLoadSuccess({ numPages: pdf.numPages });
+                                        pdfDocumentRef.current = pdf;
+                                    }}
+                                    onLoadError={handleDocumentError}
+                                >
+                                    <Page
+                                        pageNumber={currentPage}
+                                        scale={scale}
+                                        renderTextLayer={true}
+                                        renderAnnotationLayer={false}
+                                    />
+                                </Document>
+                            </div>
+
+                            <p className="selection-hint">
+                                Double-click any word to set it as the speed-reading start point
+                            </p>
+                        </>
+                    )}
+                </div>
             </div>
 
             {contextPdfData && numPages > 0 && (

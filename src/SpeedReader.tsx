@@ -5,9 +5,11 @@ import { useReading } from './ReadingContext';
 interface SpeedReaderProps {
   onNavigateToPdf: () => void;
   isActive: boolean;
+  isSplitView: boolean;
+  onToggleSplitView: () => void;
 }
 
-const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) => {
+const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive, isSplitView, onToggleSplitView }) => {
   const {
     getAllWords,
     currentWordIndex,
@@ -16,6 +18,7 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
     setCurrentReadingPage,
     setCurrentViewPage,
     setTargetWord,
+    setPdfSelectedTarget,
     pdfPath,
     totalPages,
     pageTexts,
@@ -30,15 +33,20 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [wpm, setWpm] = useState(250);
+  const [wordSize, setWordSize] = useState(52);
   const [isDark, setIsDark] = useState(true);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [showOrpColor, setShowOrpColor] = useState(true);
+  const [showOrpBox, setShowOrpBox] = useState(true);
+  const [showCenterLine, setShowCenterLine] = useState(true);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const preloadRequestedRef = useRef<Set<number>>(new Set());
+  const punctuationPauseMs = 100; // Extra pause for punctuation (ms)
 
   // ─── ORP ─────────────────────────────────────────────────────────────────────
 
   const getWordParts = () => {
     const word = words[currentWordIndex] || '';
-    const orp = Math.round(word.length * 0.35);
+    const orp = Math.round(word.length * 0.3);
     return {
       before: word.substring(0, orp),
       orp: word.charAt(orp),
@@ -109,7 +117,7 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
 
   const pause = useCallback(() => {
     setIsPlaying(false);
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
   }, []);
 
   useEffect(() => { if (!isActive) pause(); }, [isActive, pause]);
@@ -117,19 +125,35 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
   const play = useCallback(() => {
     if (currentWordIndex >= words.length) setCurrentWordIndex(0);
     setIsPlaying(true);
-    intervalRef.current = setInterval(() => {
-      setCurrentWordIndex(prev => {
-        const next = prev + 1;
-        if (next >= words.length) {
+
+    const scheduleNextWord = (index: number) => {
+      if (index >= words.length) {
+        setIsPlaying(false);
+        return;
+      }
+
+      // Calculate base interval from WPM
+      let delay = 60000 / wpm;
+
+      // Add extra pause if current word ends with punctuation
+      const currentWord = words[index] || '';
+      if (/[.,;:!?—]$/.test(currentWord)) {
+        delay += punctuationPauseMs;
+      }
+
+      timeoutRef.current = setTimeout(() => {
+        if (index + 1 >= words.length) {
           setIsPlaying(false);
-          clearInterval(intervalRef.current!);
-          intervalRef.current = null;
-          return words.length - 1;
+          setCurrentWordIndex(words.length - 1);
+        } else {
+          setCurrentWordIndex(index + 1);
+          scheduleNextWord(index + 1);
         }
-        return next;
-      });
-    }, 60000 / wpm);
-  }, [currentWordIndex, wpm, words.length, setCurrentWordIndex]);
+      }, delay);
+    };
+
+    scheduleNextWord(currentWordIndex);
+  }, [currentWordIndex, wpm, words, punctuationPauseMs, setCurrentWordIndex]);
 
   const togglePlayPause = useCallback(() => {
     if (isPlaying) pause(); else play();
@@ -164,6 +188,32 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
     if (isPlaying) { pause(); setTimeout(() => play(), 50); }
   };
 
+  const handleBackToPdf = useCallback(() => {
+    pause();
+    if (pageTexts.size > 0 && words.length > 0) {
+      const rawWord = words[currentWordIndex] || '';
+      const cleanWord = rawWord.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
+      if (cleanWord) {
+        const sortedPages = Array.from(pageTexts.keys()).sort((a, b) => a - b);
+        let cumulative = 0;
+        let wordPage = currentReadingPage;
+        let wordIndexOnPage = currentWordIndex;
+        for (const page of sortedPages) {
+          const pt = pageTexts.get(page)!;
+          if (currentWordIndex < cumulative + pt.wordCount) {
+            wordPage = page;
+            wordIndexOnPage = currentWordIndex - cumulative;
+            break;
+          }
+          cumulative += pt.wordCount;
+        }
+        setTargetWord({ word: cleanWord, pageNumber: wordPage, wordIndexOnPage });
+      }
+    }
+    setPdfSelectedTarget(null);
+    onNavigateToPdf();
+  }, [pause, currentWordIndex, words, pageTexts, currentReadingPage, setTargetWord, setPdfSelectedTarget, onNavigateToPdf]);
+
   // ─── Keyboard shortcuts ───────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -177,7 +227,7 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
     return () => document.removeEventListener('keydown', onKey);
   }, [isActive, togglePlayPause, goBack, goForward]);
 
-  useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
+  useEffect(() => () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); }, []);
 
   // ─── Derived display values ───────────────────────────────────────────────────
 
@@ -212,10 +262,14 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
 
       {/* Topbar */}
       <header className="sr-topbar">
-        <button className="sr-back-btn" onClick={onNavigateToPdf} type="button">
-          ← PDF
-        </button>
-        <div className="sr-topbar-sep" />
+        {!isSplitView && (
+          <>
+            <button className="sr-back-btn" onClick={handleBackToPdf} type="button">
+              ← PDF
+            </button>
+            <div className="sr-topbar-sep" />
+          </>
+        )}
         <div className="sr-file-info">
           {filename ? (
             <>
@@ -232,6 +286,14 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
         </div>
         <button
           className="sr-theme-btn"
+          onClick={onToggleSplitView}
+          type="button"
+        >
+          {isSplitView ? 'Exit Split' : 'Split'}
+        </button>
+        <div className="sr-topbar-sep" />
+        <button
+          className="sr-theme-btn"
           onClick={() => setIsDark(d => !d)}
           type="button"
           title="Toggle light / dark"
@@ -243,10 +305,16 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
       {/* Word display */}
       <main className="sr-display">
         <div className="sr-word-frame">
-          <div className="sr-center-mark" />
-          <div className="sr-word">
+          <div className="sr-center-mark" style={{ display: showCenterLine ? undefined : 'none' }} />
+          <div className="sr-word" style={{ fontSize: `${wordSize}px` }}>
             <span className="sr-before">{wordParts.before}</span>
-            <span className="sr-orp">{wordParts.orp}</span>
+            <span
+              className="sr-orp"
+              style={{
+                color: showOrpColor ? undefined : 'inherit',
+                background: showOrpBox ? undefined : 'transparent',
+              }}
+            >{wordParts.orp}</span>
             <span className="sr-after">{wordParts.after}</span>
           </div>
         </div>
@@ -265,48 +333,87 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive }) 
 
       {/* Settings panel */}
       <footer className="sr-panel">
+        <div className="sr-panel-inner">
 
-        {/* Speed */}
-        <div className="sr-setting-row">
-          <span className="sr-setting-label">Speed</span>
-          <input
-            type="range"
-            className="sr-slider"
-            min="60"
-            max="1000"
-            step="10"
-            value={wpm}
-            onChange={e => updateSpeed(parseInt(e.target.value))}
-          />
-          <span className="sr-setting-value">{wpm} WPM</span>
-        </div>
-
-        {/* Transport */}
-        <div className="sr-transport">
-          <button className="sr-btn" onClick={resetToStart} type="button">Reset</button>
-          <button className="sr-btn" onClick={goBack} type="button">← 5</button>
-          <button className="sr-btn sr-btn-play" onClick={togglePlayPause} type="button">
-            {isPlaying ? 'Pause' : 'Play'}
-          </button>
-          <button className="sr-btn" onClick={goForward} type="button">5 →</button>
-        </div>
-
-        {/* Shortcuts */}
-        <div className="sr-shortcuts">
-          <div className="sr-shortcut">
-            <span className="sr-key">Space</span>
-            <span>Play / Pause</span>
+          {/* Speed */}
+          <div className="sr-setting-row">
+            <span className="sr-setting-label">Speed</span>
+            <input
+              type="range"
+              className="sr-slider"
+              min="60"
+              max="1000"
+              step="10"
+              value={wpm}
+              onChange={e => updateSpeed(parseInt(e.target.value))}
+            />
+            <span className="sr-setting-value">{wpm} WPM</span>
           </div>
-          <div className="sr-shortcut">
-            <span className="sr-key">←</span>
-            <span>Back 5</span>
-          </div>
-          <div className="sr-shortcut">
-            <span className="sr-key">→</span>
-            <span>Forward 5</span>
-          </div>
-        </div>
 
+          {/* Word size */}
+          <div className="sr-setting-row">
+            <span className="sr-setting-label">Size</span>
+            <input
+              type="range"
+              className="sr-slider"
+              min="24"
+              max="96"
+              step="4"
+              value={wordSize}
+              onChange={e => setWordSize(parseInt(e.target.value))}
+            />
+            <span className="sr-setting-value">{wordSize}px</span>
+          </div>
+
+          {/* Display toggles */}
+          <div className="sr-setting-row">
+            <span className="sr-setting-label">Show</span>
+            <div className="sr-toggle-group">
+              <button
+                className={`sr-toggle-btn${showOrpColor ? ' sr-toggle-on' : ''}`}
+                onClick={() => setShowOrpColor(v => !v)}
+                type="button"
+              >Color</button>
+              <button
+                className={`sr-toggle-btn${showOrpBox ? ' sr-toggle-on' : ''}`}
+                onClick={() => setShowOrpBox(v => !v)}
+                type="button"
+              >Box</button>
+              <button
+                className={`sr-toggle-btn${showCenterLine ? ' sr-toggle-on' : ''}`}
+                onClick={() => setShowCenterLine(v => !v)}
+                type="button"
+              >Line</button>
+            </div>
+          </div>
+
+          {/* Transport */}
+          <div className="sr-transport">
+            <button className="sr-btn" onClick={resetToStart} type="button">Reset</button>
+            <button className="sr-btn" onClick={goBack} type="button">← 5</button>
+            <button className="sr-btn sr-btn-play" onClick={togglePlayPause} type="button">
+              {isPlaying ? 'Pause' : 'Play'}
+            </button>
+            <button className="sr-btn" onClick={goForward} type="button">5 →</button>
+          </div>
+
+          {/* Shortcuts */}
+          <div className="sr-shortcuts">
+            <div className="sr-shortcut">
+              <span className="sr-key">Space</span>
+              <span>Play / Pause</span>
+            </div>
+            <div className="sr-shortcut">
+              <span className="sr-key">←</span>
+              <span>Back 5</span>
+            </div>
+            <div className="sr-shortcut">
+              <span className="sr-key">→</span>
+              <span>Forward 5</span>
+            </div>
+          </div>
+
+        </div>
       </footer>
     </div>
   );

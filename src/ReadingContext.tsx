@@ -39,6 +39,12 @@ interface ReadingContextType {
   targetWord: TargetWordData | null;
   setTargetWord: (data: TargetWordData | null) => void;
 
+  // The word the user double-clicked in PdfViewer (word + page + DOM occurrence).
+  // Stored in context so SpeedReader can clear it when navigating back,
+  // preventing extractInitialPages from re-resolving the stale selection.
+  pdfSelectedTarget: { word: string; page: number; occurrence: number } | null;
+  setPdfSelectedTarget: (t: { word: string; page: number; occurrence: number } | null) => void;
+
   // Get combined text for current and next pages
   getCombinedText: () => string;
   getAllWords: () => string[];
@@ -55,6 +61,7 @@ export const ReadingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [pdfPath, setPdfPath] = useState<string | null>(null);
   const [pdfData, setPdfData] = useState<Uint8Array | null>(null);
   const [targetWord, setTargetWord] = useState<TargetWordData | null>(null);
+  const [pdfSelectedTarget, setPdfSelectedTarget] = useState<{ word: string; page: number; occurrence: number } | null>(null);
 
   const setPageText = (pageNumber: number, text: string) => {
     const words = text.split(/\s+/).filter(w => w.length > 0);
@@ -109,6 +116,8 @@ export const ReadingProvider: React.FC<{ children: ReactNode }> = ({ children })
         setPdfData,
         targetWord,
         setTargetWord,
+        pdfSelectedTarget,
+        setPdfSelectedTarget,
         getCombinedText,
         getAllWords,
       }}

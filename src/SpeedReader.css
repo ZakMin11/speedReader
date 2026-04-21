@@ -174,7 +174,8 @@
   align-items: center;
   justify-content: center;
   font-family: 'Courier New', 'Courier', monospace;
-  font-size: clamp(2rem, 5vw, 3.75rem);
+  /* font-size is overridden per-render by the wordSize inline style */
+  font-size: 52px;
   font-weight: 600;
   letter-spacing: 0.02em;
   position: relative;
@@ -248,8 +249,18 @@
   padding: 14px 18px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  align-items: center;
   flex-shrink: 0;
+}
+
+/* Centered inner wrapper — keeps controls from stretching full-width */
+.sr-panel-inner {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 /* Speed setting row */
@@ -318,10 +329,10 @@
   background: var(--btn-bg);
   border: 1px solid var(--btn-border);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
-  padding: 5px 14px;
-  border-radius: 4px;
+  padding: 8px 20px;
+  border-radius: 5px;
   cursor: pointer;
   transition: background 0.1s, border-color 0.1s;
   white-space: nowrap;
@@ -336,7 +347,7 @@
   background: var(--play-bg);
   color: var(--play-text);
   border-color: var(--play-bg);
-  padding: 5px 28px;
+  padding: 8px 40px;
   font-weight: 600;
 }
 .sr-btn-play:hover {
@@ -346,6 +357,29 @@
 }
 
 .sr-btn-spacer { flex: 1; }
+
+/* Display toggles */
+.sr-toggle-group {
+  display: flex;
+  gap: 6px;
+}
+
+.sr-toggle-btn {
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.sr-toggle-btn.sr-toggle-on {
+  color: var(--text);
+  border-color: var(--border-hi);
+}
 
 /* Keyboard shortcuts */
 .sr-shortcuts {
