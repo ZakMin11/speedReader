@@ -31,16 +31,29 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader, isSplitView, 
     const pdfContainerRef = useRef<HTMLDivElement>(null);
     const activeThumbRef = useRef<HTMLButtonElement | null>(null);
 
-    const applyHighlight = useCallback((range: Range) => {
-        if (typeof CSS !== 'undefined' && 'highlights' in CSS) {
-            (CSS as any).highlights.set('sr-target', new (window as any).Highlight(range));
+    // Single persistent Highlight instance, mutated via clear()/add().
+    // Replacing the Highlight object on every word change leaves WebKit's
+    // paint of the previous range stuck on screen.
+    const highlightRef = useRef<any>(null);
+
+    const getHighlight = useCallback(() => {
+        if (typeof CSS === 'undefined' || !('highlights' in CSS)) return null;
+        if (!highlightRef.current) {
+            highlightRef.current = new (window as any).Highlight();
+            (CSS as any).highlights.set('sr-target', highlightRef.current);
         }
+        return highlightRef.current;
     }, []);
 
+    const applyHighlight = useCallback((range: Range) => {
+        const h = getHighlight();
+        if (!h) return;
+        h.clear();
+        h.add(range);
+    }, [getHighlight]);
+
     const clearHighlight = useCallback(() => {
-        if (typeof CSS !== 'undefined' && 'highlights' in CSS) {
-            (CSS as any).highlights.delete('sr-target');
-        }
+        highlightRef.current?.clear();
     }, []);
 
     const {
@@ -262,6 +275,11 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader, isSplitView, 
             while ((m = wordRe.exec(text)) !== null && m.index < charPos) occurrence++;
 
             liveHighlightRef.current = { word: needle, page: targetWord.pageNumber, occurrence };
+        } else {
+            // Page text not loaded yet — clear so the stale previous target
+            // isn't re-applied by doLiveHighlight or the MutationObserver.
+            liveHighlightRef.current = null;
+            clearHighlight();
         }
 
         // Apply immediately — only the page-transition path needs the retry below.
