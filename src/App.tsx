@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { ReadingProvider } from './ReadingContext';
 import PdfViewer from './PdfViewer';
 import SpeedReader from './SpeedReader';
