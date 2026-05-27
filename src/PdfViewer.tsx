@@ -497,6 +497,7 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader, isSplitView, 
                     font-family: inherit;
                     color: #c8c8c8;
                     -webkit-font-smoothing: antialiased;
+                    position: relative;
                 }
 
                 .header {
@@ -693,9 +694,13 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader, isSplitView, 
                 }
 
                 .controls {
-                    position: fixed;
+                    /* Absolute within .pdf-viewer so split view doesn't push
+                       the bar over the SpeedReader pane. The sidebar offset
+                       keeps the bar centered under the PDF when the sidebar
+                       is open (sidebar is 220px → 110px offset). */
+                    position: absolute;
                     bottom: 1.5rem;
-                    left: 50%;
+                    left: calc(50% + var(--sb-offset, 0px));
                     transform: translateX(-50%);
                     background: #181818;
                     border: 1px solid #252525;
@@ -1069,7 +1074,10 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ onNavigateToReader, isSplitView, 
             </div>
 
             {contextPdfData && numPages > 0 && (
-                <div className="controls">
+                <div
+                    className="controls"
+                    style={{ ['--sb-offset' as any]: fileData && isSidebarOpen ? '110px' : '0px' }}
+                >
                     <div className="nav-controls">
                         <button className="nav-btn" onClick={goToPreviousPage} disabled={currentPage <= 1} type="button">‹</button>
                         <div className="page-info">{currentPage} / {numPages}</div>

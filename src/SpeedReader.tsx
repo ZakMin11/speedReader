@@ -306,7 +306,11 @@ const SpeedReader: React.FC<SpeedReaderProps> = ({ onNavigateToPdf, isActive, is
       <main className="sr-display">
         <div className="sr-word-frame">
           <div className="sr-center-mark" style={{ display: showCenterLine ? undefined : 'none' }} />
-          <div className="sr-word" style={{ fontSize: `${wordSize}px` }}>
+          {/* key forces a fresh DOM subtree each tick — without it, WebKit
+              occasionally leaves sub-pixel paint ghosts of the previous
+              word's .sr-before / .sr-after when only the text nodes
+              mutate inside the absolutely-positioned spans. */}
+          <div className="sr-word" key={currentWordIndex} style={{ fontSize: `${wordSize}px` }}>
             <span className="sr-before">{wordParts.before}</span>
             <span
               className="sr-orp"
